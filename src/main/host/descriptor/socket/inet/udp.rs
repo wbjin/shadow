@@ -579,6 +579,104 @@ impl UdpSocket {
         Ok(result?)
     }
 
+    pub fn recvmmsg(
+        socket: &Arc<AtomicRefCell<Self>>,
+        args: RecvmsgArgs,
+        mem: &mut MemoryManager,
+        cb_queue: &mut CallbackQueue,
+    ) -> Result<RecvmsgReturn, SyscallError> {
+            log::info!("RECVMMSG stub");
+        let socket_ref = &mut *socket.borrow_mut();
+
+        let Some(mut flags) = MsgFlags::from_bits(args.flags) else {
+            log::debug!("Unrecognized recv flags: {:#b}", args.flags);
+            return Err(Errno::EINVAL.into());
+        };
+
+        if socket_ref.status().contains(FileStatus::NONBLOCK) {
+            flags.insert(MsgFlags::MSG_DONTWAIT);
+        }
+
+        let len: libc::size_t = args.iovs.iter().map(|x| x.len).sum();
+
+        // run in a closure so that an early return doesn't skip checking if we should block
+        let result = (|| {
+            // a temporary location to store the message and header if we popped them
+            let message_storage;
+            let header_storage;
+
+            let (message, header) = if !flags.contains(MsgFlags::MSG_PEEK) {
+                // pop the message from the receive buffer
+                (message_storage, header_storage) = socket_ref
+                    .recv_buffer
+                    .pop_message()
+                    .ok_or(Errno::EWOULDBLOCK)?;
+                (&message_storage, &header_storage)
+            } else {
+                // peek the message from the receive buffer
+                let (message, header) = socket_ref
+                    .recv_buffer
+                    .peek_message()
+                    .ok_or(Errno::EWOULDBLOCK)?;
+                (message, header)
+            };
+
+            // truncate the payload if the payload is larger than the user-provided buffers
+            let truncated_message = &message[..std::cmp::min(len, message.len())];
+
+            // write the truncated message to the iovs
+            let mut writer = IoVecWriter::new(args.iovs, mem);
+            writer
+                .write_all(truncated_message)
+                .map_err(|e| Errno::try_from(e).unwrap())?;
+
+            let return_val = if flags.contains(MsgFlags::MSG_TRUNC) {
+                message.len()
+            } else {
+                // the number of bytes written
+                truncated_message.len()
+            };
+
+            let mut return_flags = MsgFlags::empty();
+            return_flags.set(MsgFlags::MSG_TRUNC, truncated_message.len() < message.len());
+
+            // update the cache of the last recv time
+            socket_ref.recv_time_of_last_read_packet = Some(header.recv_time);
+
+            Ok(RecvmsgReturn {
+                return_val: return_val.try_into().unwrap(),
+                addr: Some(header.src.into()),
+                msg_flags: return_flags.bits(),
+                control_len: 0,
+            })
+        })();
+
+        socket_ref.refresh_readable_writable(FileSignals::empty(), cb_queue);
+
+        // if the syscall would block and we don't have the MSG_DONTWAIT flag
+        if result.as_ref().err() == Some(&Errno::EWOULDBLOCK)
+            && !flags.contains(MsgFlags::MSG_DONTWAIT)
+        {
+            // if the syscall would block but the file's reading has been shut down, return EOF
+            if socket_ref.shutdown_status.contains(ShutdownFlags::READ) {
+                return Ok(RecvmsgReturn {
+                    return_val: 0,
+                    addr: None,
+                    msg_flags: 0,
+                    control_len: 0,
+                });
+            }
+
+            return Err(SyscallError::new_blocked_on_file(
+                File::Socket(Socket::Inet(InetSocket::Udp(socket.clone()))),
+                FileState::READABLE,
+                socket_ref.supports_sa_restart(),
+            ));
+        }
+
+        Ok(result?)
+    }
+
     pub fn ioctl(
         &mut self,
         request: IoctlRequest,

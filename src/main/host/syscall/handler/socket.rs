@@ -12,7 +12,7 @@ use crate::host::descriptor::socket::inet::tcp::TcpSocket;
 use crate::host::descriptor::socket::inet::udp::UdpSocket;
 use crate::host::descriptor::socket::netlink::{NetlinkFamily, NetlinkSocket, NetlinkSocketType};
 use crate::host::descriptor::socket::unix::{UnixSocket, UnixSocketType};
-use crate::host::descriptor::socket::{RecvmsgArgs, RecvmsgReturn, SendmsgArgs, Socket};
+use crate::host::descriptor::socket::{RecvmsgArgs, RecvmsgReturn, SendmsgArgs, Socket, RecvmmsgArgs, RecvmmsgReturn};
 use crate::host::descriptor::{CompatFile, Descriptor, File, FileState, FileStatus, OpenFile};
 use crate::host::syscall::handler::{SyscallContext, SyscallHandler};
 use crate::host::syscall::io::{self, IoVec};
@@ -501,6 +501,93 @@ impl SyscallHandler {
         // write msg back to the plugin
         io::update_msghdr(&mut mem, msg_ptr, msg)?;
 
+        Ok(result.return_val)
+    }
+
+    log_syscall!(
+        recvmmsg,
+        /* rv */ libc::ssize_t,
+        /* sockfd */ std::ffi::c_int,
+        // /* msg */ *const libc::mmsghdr,
+        /* flags */ nix::sys::socket::MsgFlags,
+    );
+    pub fn recvmmsg(
+        ctx: &mut SyscallContext,
+        fd: std::ffi::c_int,
+        msg_ptr: ForeignPtr<libc::mmsghdr>,
+        len: std::ffi::c_uint,
+        flags: std::ffi::c_int,
+    ) -> Result<libc::ssize_t, SyscallError> {
+        log::info!(
+            "IN RECVMMSG!!"
+        );
+        // if we were previously blocked, get the active file from the last syscall handler
+        // invocation since it may no longer exist in the descriptor table
+        let file = ctx
+            .objs
+            .thread
+            .syscall_condition()
+            // if this was for a C descriptor, then there won't be an active file object
+            .and_then(|x| x.active_file().cloned());
+
+        let file = match file {
+            // we were previously blocked, so re-use the file from the previous syscall invocation
+            Some(x) => x,
+            // get the file from the descriptor table, or return early if it doesn't exist
+            None => {
+                let desc_table = ctx.objs.thread.descriptor_table_borrow(ctx.objs.host);
+                match Self::get_descriptor(&desc_table, fd)?.file() {
+                    CompatFile::New(file) => file.clone(),
+                    CompatFile::Legacy(_file) => {
+                        return Err(Errno::ENOTSOCK.into());
+                    }
+                }
+            }
+        };
+
+        let File::Socket(socket) = file.inner_file() else {
+            return Err(Errno::ENOTSOCK.into());
+        };
+
+        let mut mem = ctx.objs.process.memory_borrow_mut();
+
+        let mut msg = io::read_mmsghdr(&mem, msg_ptr, len)?;
+
+        let args = RecvmmsgArgs {
+            msg_hdrs: msg,
+            msg_flags: flags,
+        };
+
+        // call the socket's recvmsg(), and run any resulting events
+        let mut result = CallbackQueue::queue_and_run_with_legacy(|cb_queue| {
+            Socket::recvmmsg(socket, args, &mut mem, cb_queue)
+        });
+
+        // if the syscall will block, keep the file open until the syscall restarts
+        if let Some(err) = result.as_mut().err() {
+            if let Some(cond) = err.blocked_condition() {
+                cond.set_active_file(file);
+            }
+        }
+
+        let result = result?;
+
+        // // write the socket address to the plugin and update the length in msg
+        // if !msg.name.is_null() {
+        //     if let Some(from_addr) = result.addr.as_ref() {
+        //         msg.name_len = io::write_sockaddr(&mut mem, from_addr, msg.name, msg.name_len)?;
+        //     } else {
+        //         msg.name_len = 0;
+        //     }
+        // }
+        //
+        // // update the control len and flags in msg
+        // msg.control_len = result.control_len;
+        // msg.flags = result.msg_flags;
+        //
+        // // write msg back to the plugin
+        // io::update_msghdr(&mut mem, msg_ptr, msg)?;
+        //
         Ok(result.return_val)
     }
 

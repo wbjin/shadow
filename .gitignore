@@ -13,6 +13,8 @@ cscope.*
 *.swp
 target
 __pycache__
+.nvim
+tmp
 # don't track the Cargo lock files of libraries
 /src/lib/logger/rust_bindings/Cargo.lock
 /src/lib/gml-parser/Cargo.lock

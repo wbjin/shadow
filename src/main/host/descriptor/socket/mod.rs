@@ -16,8 +16,8 @@ use crate::host::descriptor::{
 };
 use crate::host::memory_manager::MemoryManager;
 use crate::host::network::namespace::NetworkNamespace;
-use crate::host::syscall::io::IoVec;
-use crate::host::syscall::types::{ForeignArrayPtr, SyscallError};
+use crate::host::syscall::io::{IoVec, MmsgHdr};
+use crate::host::syscall::types::{ForeignArrayPtr, SyscallError, Failed};
 use crate::utility::HostTreePointer;
 use crate::utility::callback_queue::CallbackQueue;
 use crate::utility::sockaddr::SockaddrStorage;
@@ -157,6 +157,37 @@ impl Socket {
             Self::Unix(socket) => UnixSocket::recvmsg(socket, args, memory_manager, cb_queue),
             Self::Inet(socket) => InetSocket::recvmsg(socket, args, memory_manager, cb_queue),
             Self::Netlink(socket) => NetlinkSocket::recvmsg(socket, args, memory_manager, cb_queue),
+        }
+    }
+
+    pub fn recvmmsg(
+        &self,
+        args: RecvmmsgArgs,
+        memory_manager: &mut MemoryManager,
+        cb_queue: &mut CallbackQueue,
+    ) -> Result<RecvmmsgReturn, SyscallError> {
+        match self {
+            Self::Inet(socket) => {
+                log::error!("recvmmsg() for INET not implemented");
+                Err(SyscallError::Failed(Failed{
+                    errno: Errno::ENOSYS,
+                    restartable: false,
+                }))
+            }
+            Self::Unix(socket) => {
+                log::error!("recvmmsg() for Unix sockets not implemented");
+                Err(SyscallError::Failed(Failed{
+                    errno: Errno::ENOSYS,
+                    restartable: false,
+                }))
+            },
+            Self::Netlink(socket) => {
+                log::error!("recvmmsg() for Netlink sockets not implemented");
+                Err(SyscallError::Failed(Failed{
+                    errno: Errno::ENOSYS,
+                    restartable: false,
+                }))
+            }
         }
     }
 }
@@ -406,6 +437,25 @@ pub struct RecvmsgArgs<'a> {
 
 /// Return values for [`Socket::recvmsg()`].
 pub struct RecvmsgReturn {
+    /// The return value for the syscall. Typically is the number of message bytes read, but is
+    /// modifiable by the syscall flag.
+    pub return_val: libc::ssize_t,
+    /// The socket address of the received message.
+    pub addr: Option<SockaddrStorage>,
+    /// Message flags.
+    pub msg_flags: libc::c_int,
+    /// The number of control data bytes read.
+    pub control_len: libc::size_t,
+}
+
+/// Arguments for [`Socket::recvmmsg()`].
+pub struct RecvmmsgArgs {
+    pub msg_hdrs: Vec<MmsgHdr>,
+    pub msg_flags: libc::c_int
+}
+
+/// Return values for [`Socket::recvmmsg()`].
+pub struct RecvmmsgReturn {
     /// The return value for the syscall. Typically is the number of message bytes read, but is
     /// modifiable by the syscall flag.
     pub return_val: libc::ssize_t,

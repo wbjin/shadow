@@ -170,6 +170,12 @@ pub struct MsgHdr {
     pub flags: std::ffi::c_int,
 }
 
+/// Analogous to [`libc::mmsghdr`].
+pub struct MmsgHdr {
+    pub msg_hdr: MsgHdr,
+    pub msg_len: std::ffi::c_uint,
+}
+
 /// Analogous to [`libc::iovec`].
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct IoVec {
@@ -420,6 +426,32 @@ fn msghdr_to_rust(msg: &libc::msghdr, mem: &MemoryManager) -> Result<MsgHdr, Err
         control: ForeignPtr::from_raw_ptr(msg.msg_control as *mut u8),
         control_len: msg.msg_controllen,
         flags: msg.msg_flags,
+    })
+}
+
+pub fn read_mmsghdr(
+    mem: &MemoryManager,
+    mmsg_ptr: ForeignPtr<libc::mmsghdr>,
+    len: std::ffi::c_uint,
+) -> Result<Vec<MmsgHdr>, Errno> {
+    let arr_ptr = ForeignArrayPtr::new(mmsg_ptr, len as usize);
+    let mem_ref = mem.memory_ref(arr_ptr)?;
+    let plugin_mmsgs = mem_ref.deref();
+
+    let mut out = Vec::with_capacity(len as usize);
+    for mmsg in plugin_mmsgs {
+        out.push(mmsghdr_to_rust(mmsg, mem)?);
+    }
+    Ok(out)
+}
+
+fn mmsghdr_to_rust(
+    mmsg: &libc::mmsghdr,
+    mem: &MemoryManager,
+) -> Result<MmsgHdr, Errno> {
+    Ok(MmsgHdr {
+        msg_hdr: msghdr_to_rust(&mmsg.msg_hdr, mem)?,
+        msg_len: mmsg.msg_len,
     })
 }
 
