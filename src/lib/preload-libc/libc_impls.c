@@ -47,7 +47,7 @@ long syscall(long n, ...) {
     long arg6 = va_arg(args, long);
     va_end(args);
 
-    return shim_api_sscall(n, arg1, arg2, arg3, arg4, arg5, arg6);
+    return shim_api_syscall(n, arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 // man 3 localtime

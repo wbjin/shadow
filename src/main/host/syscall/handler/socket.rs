@@ -518,9 +518,6 @@ impl SyscallHandler {
         len: std::ffi::c_uint,
         flags: std::ffi::c_int,
     ) -> Result<libc::ssize_t, SyscallError> {
-        log::info!(
-            "IN RECVMMSG!!"
-        );
         // if we were previously blocked, get the active file from the last syscall handler
         // invocation since it may no longer exist in the descriptor table
         let file = ctx
@@ -553,14 +550,14 @@ impl SyscallHandler {
 
         let mut msg = io::read_mmsghdr(&mem, msg_ptr, len)?;
 
-        let args = RecvmmsgArgs {
+        let mut args = RecvmmsgArgs {
             msg_hdrs: msg,
             msg_flags: flags,
         };
 
-        // call the socket's recvmsg(), and run any resulting events
+        // call the socket's recvmmsg(), and run any resulting events
         let mut result = CallbackQueue::queue_and_run_with_legacy(|cb_queue| {
-            Socket::recvmmsg(socket, args, &mut mem, cb_queue)
+            Socket::recvmmsg(socket, &mut args, &mut mem, cb_queue)
         });
 
         // if the syscall will block, keep the file open until the syscall restarts
@@ -586,8 +583,10 @@ impl SyscallHandler {
         // msg.flags = result.msg_flags;
         //
         // // write msg back to the plugin
-        // io::update_msghdr(&mut mem, msg_ptr, msg)?;
-        //
+        io::update_mmsghdr(&mut mem, msg_ptr, args.msg_hdrs)?;
+
+        io::debug_mmsghdr(&mut mem, msg_ptr, result.return_val as usize);
+
         Ok(result.return_val)
     }
 

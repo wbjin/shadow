@@ -162,18 +162,12 @@ impl Socket {
 
     pub fn recvmmsg(
         &self,
-        args: RecvmmsgArgs,
+        args: &mut RecvmmsgArgs,
         memory_manager: &mut MemoryManager,
         cb_queue: &mut CallbackQueue,
     ) -> Result<RecvmmsgReturn, SyscallError> {
         match self {
-            Self::Inet(socket) => {
-                log::error!("recvmmsg() for INET not implemented");
-                Err(SyscallError::Failed(Failed{
-                    errno: Errno::ENOSYS,
-                    restartable: false,
-                }))
-            }
+            Self::Inet(socket) => InetSocket::recvmmsg(socket, args, memory_manager, cb_queue),
             Self::Unix(socket) => {
                 log::error!("recvmmsg() for Unix sockets not implemented");
                 Err(SyscallError::Failed(Failed{

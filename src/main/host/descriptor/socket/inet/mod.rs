@@ -10,7 +10,7 @@ use shadow_shim_helper_rs::syscall_types::ForeignPtr;
 
 use crate::cshadow as c;
 use crate::host::descriptor::listener::{StateListenHandle, StateListenerFilter};
-use crate::host::descriptor::socket::{RecvmsgArgs, RecvmsgReturn, SendmsgArgs};
+use crate::host::descriptor::socket::{RecvmsgArgs, RecvmsgReturn, SendmsgArgs, RecvmmsgArgs, RecvmmsgReturn};
 use crate::host::descriptor::{
     FileMode, FileSignals, FileState, FileStatus, OpenFile, SyscallResult,
 };
@@ -18,7 +18,7 @@ use crate::host::memory_manager::MemoryManager;
 use crate::host::network::interface::FifoPacketPriority;
 use crate::host::network::namespace::{AssociationHandle, NetworkNamespace};
 use crate::host::syscall::io::IoVec;
-use crate::host::syscall::types::SyscallError;
+use crate::host::syscall::types::{SyscallError, Failed};
 use crate::network::packet::{IanaProtocol, PacketRc};
 use crate::utility::HostTreePointer;
 use crate::utility::callback_queue::CallbackQueue;
@@ -171,6 +171,32 @@ impl InetSocket {
             }
             Self::Tcp(socket) => TcpSocket::recvmsg(socket, args, memory_manager, cb_queue),
             Self::Udp(socket) => UdpSocket::recvmsg(socket, args, memory_manager, cb_queue),
+        }
+    }
+
+    pub fn recvmmsg(
+        &self,
+        args: &mut RecvmmsgArgs,
+        memory_manager: &mut MemoryManager,
+        cb_queue: &mut CallbackQueue,
+    ) -> Result<RecvmmsgReturn, SyscallError> {
+        log::info!("Inet recvmmsg");
+        match self {
+            Self::LegacyTcp(socket) => {
+                log::error!("recvmmsg() for INET Legacy TCP sockets not implemented");
+                Err(SyscallError::Failed(Failed{
+                    errno: Errno::ENOSYS,
+                    restartable: false,
+                }))
+            }
+            Self::Tcp(socket) => {
+                log::error!("recvmmsg() for INET TCP sockets not implemented");
+                Err(SyscallError::Failed(Failed{
+                    errno: Errno::ENOSYS,
+                    restartable: false,
+                }))
+            }
+            Self::Udp(socket) => UdpSocket::recvmmsg(socket, args, memory_manager, cb_queue),
         }
     }
 }

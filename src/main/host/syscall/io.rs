@@ -432,7 +432,7 @@ fn msghdr_to_rust(msg: &libc::msghdr, mem: &MemoryManager) -> Result<MsgHdr, Err
 pub fn read_mmsghdr(
     mem: &MemoryManager,
     mmsg_ptr: ForeignPtr<libc::mmsghdr>,
-    len: std::ffi::c_uint,
+    len: std::ffi::c_uint, // This int is the number of msg_hdr, passed in by user
 ) -> Result<Vec<MmsgHdr>, Errno> {
     let arr_ptr = ForeignArrayPtr::new(mmsg_ptr, len as usize);
     let mem_ref = mem.memory_ref(arr_ptr)?;
@@ -445,14 +445,93 @@ pub fn read_mmsghdr(
     Ok(out)
 }
 
+pub fn update_mmsghdr(
+    mem: &mut MemoryManager,
+    mmsg_ptr: ForeignPtr<libc::mmsghdr>,
+    mmsgs: Vec<MmsgHdr>,
+) -> Result<(), Errno> {
+    let arr_ptr = ForeignArrayPtr::new(mmsg_ptr, mmsgs.len());
+    let mut mem_ref = mem.memory_ref_mut(arr_ptr)?;
+    let plugin_mmsgs: &mut [libc::mmsghdr] = mem_ref.deref_mut();
+
+    for (plugin_msg, msg) in plugin_mmsgs.iter_mut().zip(mmsgs.iter()) {
+        // update_msghdr(mem, plugin_msg, msg.msg_hdr);
+        plugin_msg.msg_len = msg.msg_len;
+    }
+    mem_ref.flush()?;
+    Ok(())
+}
+
 fn mmsghdr_to_rust(
     mmsg: &libc::mmsghdr,
     mem: &MemoryManager,
 ) -> Result<MmsgHdr, Errno> {
     Ok(MmsgHdr {
         msg_hdr: msghdr_to_rust(&mmsg.msg_hdr, mem)?,
-        msg_len: mmsg.msg_len,
+        msg_len: 0, // doesn't actually have to be set because its for indicating how mayn bytes on
+                    // return
     })
+}
+
+pub fn debug_mmsghdr(
+    mem: &mut MemoryManager,
+    msg_ptr: ForeignPtr<libc::mmsghdr>,
+    count: usize,
+) -> Result<(), Errno> {
+    if count == 0 {
+        log::info!("debug_mmsghdr_array: (empty array)");
+        return Ok(());
+    }
+
+    // Map every header once.
+    let arr_ptr = ForeignArrayPtr::new(msg_ptr, count);
+    let mem_ref = mem.memory_ref(arr_ptr)?;
+    let plugin_mmsgs = mem_ref.deref();
+
+    const MAX_PREVIEW: usize = 64; // bytes per iovec to print at most
+
+    for (idx, plugin_mmsg) in plugin_mmsgs.iter().enumerate() {
+        let rust_mmsg = mmsghdr_to_rust(plugin_mmsg, mem)?;
+        let msg_hdr = msghdr_to_rust(&plugin_mmsg.msg_hdr, mem)?;
+        let msg_len = plugin_mmsg.msg_len as usize;
+
+        log::info!("┌─ mmsghdr[{idx}] ──────────────────────────────────────────────");
+        log::info!("│ msg_len = {}", msg_len);
+
+        let h = &rust_mmsg.msg_hdr;
+        log::info!("│ name_ptr      = {:?}, name_len      = {}", h.name, h.name_len);
+        log::info!("│ control_ptr   = {:?}, control_len   = {}", h.control, h.control_len);
+        log::info!("│ flags         = 0x{:x}", h.flags);
+        log::info!("│ iov_cnt       = {}", h.iovs.len());
+
+        for (i, iov) in h.iovs.iter().enumerate() {
+            // Read up to MAX_PREVIEW bytes from this iovec.
+            let arr_ptr = ForeignArrayPtr::new(iov.base, msg_len);
+            let slice_ref = mem.memory_ref(arr_ptr)?;
+            let data = slice_ref.deref();
+
+            // Convert to printable ASCII (non‑printables → '.').
+            let ascii: String = data
+                .iter()
+                .map(|b| {
+                    let c = *b as char;
+                    if c.is_ascii_graphic() || c == ' ' {
+                        c
+                    } else {
+                        '.'
+                    }
+                })
+                .collect();
+
+            log::info!(
+                "│   ascii = \"{}\"",
+                ascii,
+            );
+        }
+        log::info!("└──────────────────────────────────────────────────────────────");
+    }
+
+    Ok(())
 }
 
 /// Read an array of strings, each of which with max length
