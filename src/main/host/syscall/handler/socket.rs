@@ -5,6 +5,8 @@ use log::*;
 use nix::sys::socket::SockFlag;
 use shadow_shim_helper_rs::syscall_types::ForeignPtr;
 
+use memoffset::offset_of;
+
 use crate::host::descriptor::descriptor_table::DescriptorHandle;
 use crate::host::descriptor::socket::inet::InetSocket;
 use crate::host::descriptor::socket::inet::legacy_tcp::LegacyTcpSocket;
@@ -501,6 +503,42 @@ impl SyscallHandler {
         io::update_msghdr(&mut mem, msg_ptr, msg)?;
 
         Ok(result.return_val)
+    }
+
+    //TODO: Implement SyscallDisplay for libc::mmsghdr
+    log_syscall!(
+        recvmmsg,
+        /* rv */ libc::ssize_t,
+        /* sockfd */ std::ffi::c_int,
+        // /* mmsg */ *const libc::mmsghdr,
+        /* len */ std::ffi::c_uint,
+        /* flags */ nix::sys::socket::MsgFlags,
+        /* timeout_ptr */ *const linux_api::time::timespec,
+    );
+    pub fn recvmmsg(
+        ctx: &mut SyscallContext,
+        fd: std::ffi::c_int,
+        msgvec: ForeignPtr<libc::mmsghdr>,
+        len: std::ffi::c_uint,
+        flags: std::ffi::c_int,
+        timeout_ptr: ForeignPtr<linux_api::time::timespec>,
+    ) -> Result<libc::ssize_t, SyscallError> {
+        let mmsg_hdr_arr = ForeignArrayPtr::new(msgvec, len as usize);
+
+        for i in 0..(len as usize) {
+            let mmsg_hdr = mmsg_hdr_arr.ptr().add(i);
+            let msg_hdr_offset = offset_of!(libc::mmsghdr, msg_hdr);
+            let msg_len_offset = offset_of!(libc::mmsghdr, msg_len);
+
+            let msg_hdr = mmsg_hdr.cast::<u8>().add(msg_hdr_offset).cast::<libc::msghdr>();
+            let msg_len = mmsg_hdr.cast::<u8>().add(msg_len_offset).cast::<libc::c_uint>();
+
+            let bytes_read = Self::recvmsg(ctx, fd, msg_hdr, flags)?.try_into().unwrap();
+            let mut mem = ctx.objs.process.memory_borrow_mut();
+            mem.write(msg_len, &bytes_read);
+        }
+
+        Ok(len as isize)
     }
 
     log_syscall!(

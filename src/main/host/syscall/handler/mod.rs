@@ -470,6 +470,7 @@ impl SyscallHandler {
             SyscallNum::NR_readv => handle!(readv),
             SyscallNum::NR_recvfrom => handle!(recvfrom),
             SyscallNum::NR_recvmsg => handle!(recvmsg),
+            SyscallNum::NR_recvmmsg => handle!(recvmmsg),
             SyscallNum::NR_renameat => handle!(renameat),
             SyscallNum::NR_renameat2 => handle!(renameat2),
             SyscallNum::NR_rseq => handle!(rseq),
