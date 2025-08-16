@@ -2,6 +2,7 @@ use std::collections::LinkedList;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
+use std::borrow::Cow;
 
 use atomic_refcell::AtomicRefCell;
 use bytes::{Bytes, BytesMut};
@@ -871,6 +872,10 @@ impl UdpSocket {
 
                 Ok(bytes_written as libc::socklen_t)
             }
+            (libc::IPPROTO_UDP, _) => {
+                log::info!("getsockopt called with IPPROTO_UDP (17) and 103");
+                Err(Errno::ENOPROTOOPT.into())
+            }
             (libc::SOL_SOCKET, _) => {
                 log_once_per_value_at_level!(
                     (level, optname),
@@ -988,6 +993,24 @@ impl UdpSocket {
                         "setsockopt SO_BROADCAST not yet implemented for udp; ignoring and returning 0"
                     );
                 }
+            }
+            (libc::IPPROTO_IP, libc::IP_MTU_DISCOVER) => {
+                log::info!("setsocktopt level IPPROTO_IP (0) and option IP_MTU_DISCOVER (10) not yet implemented");
+            }
+            (libc::IPPROTO_IP, libc::IP_PKTINFO) => {
+                log::info!("setsocktopt level IPPROTO_IPV (0) and option IP_PKTINFO (8) not yet implemented");
+            }
+            (libc::IPPROTO_IP, libc::IP_RECVTOS) => {
+                log::info!("setsocktopt level IPPROTO_IPV (0) and option IP_RECVTOS (13) not yet implemented");
+            }
+            (libc::IPPROTO_IPV6, libc::IPV6_MTU_DISCOVER) => {
+                log::info!("setsocktopt level IPPROTO_IPV6 (41) and option IPV6_MTU_DISCOVER (23) not yet implemented");
+            }
+            (libc::IPPROTO_IPV6, libc::IPV6_RECVTCLASS) => {
+                log::info!("setsocktopt level IPPROTO_IPV6 (41) and option IPV6_RECVTCLASS (66) not yet implemented");
+            }
+            (libc::IPPROTO_IPV6, libc::IPV6_RECVPKTINFO) => {
+                log::info!("setsocktopt level IPPROTO_IPV6 (41) and option IPV6_RECVPKTINFO (49) not yet implemented");
             }
             _ => {
                 log_once_per_value_at_level!(

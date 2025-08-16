@@ -20,9 +20,16 @@ use crate::host::syscall::handler::{SyscallContext, SyscallHandler};
 use crate::host::syscall::io::{self, IoVec};
 use crate::host::syscall::type_formatting::{SyscallBufferArg, SyscallSockAddrArg};
 use crate::host::syscall::types::ForeignArrayPtr;
-use crate::host::syscall::types::SyscallError;
+use crate::host::syscall::types::{SyscallError, Failed};
 use crate::utility::callback_queue::CallbackQueue;
 use crate::utility::sockaddr::SockaddrStorage;
+
+use std::cell::Cell;
+use std::slice;
+
+thread_local! {
+    static MSG_COUNT: Cell<usize> = const { Cell::new(0) };
+}
 
 impl SyscallHandler {
     log_syscall!(
@@ -520,12 +527,20 @@ impl SyscallHandler {
         fd: std::ffi::c_int,
         msgvec: ForeignPtr<libc::mmsghdr>,
         len: std::ffi::c_uint,
-        flags: std::ffi::c_int,
+        mut flags: std::ffi::c_int,
         timeout_ptr: ForeignPtr<linux_api::time::timespec>,
     ) -> Result<libc::ssize_t, SyscallError> {
+        use nix::sys::socket::MsgFlags;
+
         let mmsg_hdr_arr = ForeignArrayPtr::new(msgvec, len as usize);
 
-        for i in 0..(len as usize) {
+        let Some(mut msg_flags) = MsgFlags::from_bits(flags) else {
+            log::debug!("Unrecognized recv flags: {:#b}", flags);
+            return Err(Errno::EINVAL.into());
+        };
+        log::info!("recvmmsg flags: {:#?} len: {}", msg_flags, len);
+
+        for i in MSG_COUNT.get()..(len as usize) {
             let mmsg_hdr = mmsg_hdr_arr.ptr().add(i);
             let msg_hdr_offset = offset_of!(libc::mmsghdr, msg_hdr);
             let msg_len_offset = offset_of!(libc::mmsghdr, msg_len);
@@ -533,12 +548,35 @@ impl SyscallHandler {
             let msg_hdr = mmsg_hdr.cast::<u8>().add(msg_hdr_offset).cast::<libc::msghdr>();
             let msg_len = mmsg_hdr.cast::<u8>().add(msg_len_offset).cast::<libc::c_uint>();
 
-            let bytes_read = Self::recvmsg(ctx, fd, msg_hdr, flags)?.try_into().unwrap();
+            let res = Self::recvmsg(ctx, fd, msg_hdr, flags);
+            let bytes_read: u32 = match res {
+                Ok(n) => n.try_into().unwrap(),
+                Err(SyscallError::Failed(Failed{ errno: Errno::EWOULDBLOCK, .. })) => {
+                    if msg_flags.contains(MsgFlags::MSG_DONTWAIT) {
+                        log::info!("Blocked recvmsg and msg dontwait set");
+                        break;
+                    }
+                    return Err(SyscallError::Failed(Failed{ errno: Errno::EWOULDBLOCK, restartable: false}));
+                },
+                Err(e) => return Err(e),
+            };
+
             let mut mem = ctx.objs.process.memory_borrow_mut();
             mem.write(msg_len, &bytes_read);
+            MSG_COUNT.set(MSG_COUNT.get() + 1);
+
+            if msg_flags.contains(MsgFlags::MSG_WAITFORONE) {
+                msg_flags.insert(MsgFlags::MSG_DONTWAIT);
+                flags = msg_flags.bits();
+            }
+
+            log::info!("iteration {} received {} messages", i, MSG_COUNT.get());
         }
 
-        Ok(len as isize)
+        let messages_received = MSG_COUNT.get().try_into().unwrap();
+        log::info!("Returning from recvmmsg {}", messages_received);
+        MSG_COUNT.set(0);
+        Ok(messages_received)
     }
 
     log_syscall!(
